@@ -1,0 +1,40 @@
+name: macOS Build
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Allows manual trigger
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Install Dependencies
+      run: |
+        brew install glfw glew
+
+    - name: Compile Game
+      run: |
+        clang++ -std=c++11 assets/scripts/main.cpp dependencies/imgui/*.cpp dependencies/imgui/backends/imgui_impl_glfw.cpp dependencies/imgui/backends/imgui_impl_opengl2.cpp -I. -I./dependencies/imgui -I./dependencies/imgui/backends -I$(brew --prefix)/include -L$(brew --prefix)/lib -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo -lglfw -lglew -o Minecraft_Mac_App
+
+    - name: Package Application
+      run: |
+        # Create a folder to organize the build
+        mkdir -p Mac_Build
+        mv Minecraft_Mac_App Mac_Build/
+        cp -r assets Mac_Build/
+        
+        # If there are dependencies that need to be alongside the executable, copy them here
+        # (macOS usually bundles this in a .app, but a folder structure works too for simple games)
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Minecraft-MacOS-Build
+        path: Mac_Build/
