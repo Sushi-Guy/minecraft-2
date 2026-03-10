@@ -236,10 +236,14 @@ void draw_square_color(float color[4], float points[4][3], float thickness, floa
     }
 }
 
-void draw_cube_texture(GLuint textureID, float points[6][4][3], float outlineColor[4], float thickness, bool activated, bool tiled = false) {
+void draw_cube_texture(GLuint textureID, float points[6][4][3], float outlineColor[4], float thickness, bool activated, bool tiled = false, const float* blockColor = nullptr) {
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, textureID);
-    glColor4f(1.0f, 1.0f, 1.0f, 1.0f); // Make sure color doesn't tint the texture
+    if (blockColor) {
+        glColor4fv(blockColor);
+    } else {
+        glColor4f(1.0f, 1.0f, 1.0f, 1.0f); // Make sure color doesn't tint the texture
+    }
 
     glBegin(GL_QUADS);
     for(int i = 0; i < 6; i++) {

@@ -232,9 +232,10 @@ int main(void)
     bool leftMousePressed = false;
     bool rightMousePressed = false;
     float lastPlaceTime = 0.0f;
-    float lastBreakTime =  0.0f;
-    float placeCooldown = 0.15f;
-    float breakCooldown = 0.8f; // Temporary value
+    float currentBreakTime = 0.0f;
+    float lastBreakSoundTime = 0.0f;
+    int currentBreakingBlockIndex = -1;
+    float placeCooldown = 0.2f;
 
     // FPS tracking
     int fpsFrames = 0;
@@ -306,26 +307,68 @@ int main(void)
 
         // --- MOUSE CLICK INTERACTION ---
         bool leftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-        if (leftDown && (currentFrameTime - lastBreakTime >= breakCooldown)) {
+        if (leftDown) {
             float placeX, placeY, placeZ;
             int hitIndex = raycast(playerX, playerY, playerZ, playerPitch, playerYaw, level.data(), NUM_BLOCKS, 5.0f, 0.05f, placeX, placeY, placeZ);
+            
             if (hitIndex != -1) {
-                GLuint brokenTexture = level[hitIndex].textureID;
-                level.erase(level.begin() + hitIndex);
-                NUM_BLOCKS = level.size();
+                if (hitIndex == currentBreakingBlockIndex) {
+                    currentBreakTime += deltaTime;
+                    
+                    if (currentBreakTime - lastBreakSoundTime >= 0.25f) {
+                        GLuint hitTexture = level[hitIndex].textureID;
+                        if (hitTexture == grassTex || hitTexture == dirtTex) {
+                            ma_engine_play_sound(&engine, "assets/sounds/dirt_break.wav", NULL);
+                        } else if (hitTexture == stoneTex) {
+                            ma_engine_play_sound(&engine, "assets/sounds/stone_break.wav", NULL);
+                        } else if (hitTexture == oak_planksTex) {
+                            ma_engine_play_sound(&engine, "assets/sounds/wood_break.wav", NULL);
+                        } else {
+                            ma_engine_play_sound(&engine, "assets/sounds/default_break.wav", NULL);
+                        }
+                        lastBreakSoundTime = currentBreakTime;
+                    }
 
-                if (brokenTexture == grassTex || brokenTexture == dirtTex) {
-                    ma_engine_play_sound(&engine, "assets/sounds/dirt_break.wav", NULL);
-                } else if (brokenTexture == stoneTex) {
-                    ma_engine_play_sound(&engine, "assets/sounds/stone_break.wav", NULL);
-                } else if (brokenTexture == oak_planksTex) {
-                    ma_engine_play_sound(&engine, "assets/sounds/wood_break.wav", NULL);
+                    float requiredBreakTime = 0.5f;
+                    GLuint tex = level[hitIndex].textureID;
+                    if (tex == grassTex || tex == dirtTex) {
+                        requiredBreakTime = 0.5f;
+                    } else if (tex == oak_planksTex) {
+                        requiredBreakTime = 1.0f;
+                    } else if (tex == stoneTex) {
+                        requiredBreakTime = 1.5f;
+                    }
+
+                    if (currentBreakTime >= requiredBreakTime) {
+                        level.erase(level.begin() + hitIndex);
+                        NUM_BLOCKS = level.size();
+                        
+                        currentBreakTime = 0.0f;
+                        currentBreakingBlockIndex = -1;
+                    }
                 } else {
-                    ma_engine_play_sound(&engine, "assets/sounds/default_break.wav", NULL);
+                    currentBreakingBlockIndex = hitIndex;
+                    currentBreakTime = deltaTime;
+                    lastBreakSoundTime = 0.0f;
+                    
+                    GLuint hitTexture = level[hitIndex].textureID;
+                    if (hitTexture == grassTex || hitTexture == dirtTex) {
+                        ma_engine_play_sound(&engine, "assets/sounds/dirt_break.wav", NULL);
+                    } else if (hitTexture == stoneTex) {
+                        ma_engine_play_sound(&engine, "assets/sounds/stone_break.wav", NULL);
+                    } else if (hitTexture == oak_planksTex) {
+                        ma_engine_play_sound(&engine, "assets/sounds/wood_break.wav", NULL);
+                    } else {
+                        ma_engine_play_sound(&engine, "assets/sounds/default_break.wav", NULL);
+                    }
                 }
-                
-                lastBreakTime = currentFrameTime;
+            } else {
+                currentBreakingBlockIndex = -1;
+                currentBreakTime = 0.0f;
             }
+        } else {
+            currentBreakingBlockIndex = -1;
+            currentBreakTime = 0.0f;
         }
         leftMousePressed = leftDown;
 
@@ -379,8 +422,34 @@ int main(void)
         for (int i = 0; i < NUM_BLOCKS; ++i) {
             float tempPoints[6][4][3];
             getBlockPoints(level[i], tempPoints);
+            
+            float* colorPtr = nullptr;
+            float blockColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+
+            if (i == currentBreakingBlockIndex) {
+                float requiredBreakTime = 0.5f;
+                GLuint tex = level[i].textureID;
+                if (tex == grassTex || tex == dirtTex) {
+                    requiredBreakTime = 0.5f;
+                } else if (tex == oak_planksTex) {
+                    requiredBreakTime = 1.0f;
+                } else if (tex == stoneTex) {
+                    requiredBreakTime = 1.5f;
+                }
+                
+                float progress = currentBreakTime / requiredBreakTime;
+                if (progress > 1.0f) progress = 1.0f;
+                
+                // Color gets darker (more gray) as progress increases
+                float shade = 1.0f - (progress * 0.7f); // Drops down to 0.3 brightness
+                blockColor[0] = shade;
+                blockColor[1] = shade;
+                blockColor[2] = shade;
+                colorPtr = blockColor;
+            }
+
             // We pass "false" to disable outlines for performance
-            draw_cube_texture(level[i].textureID, tempPoints, outlineColor, 1.0f, false, true);
+            draw_cube_texture(level[i].textureID, tempPoints, outlineColor, 1.0f, false, true, colorPtr);
         }
 
         // Reset the world back to normal so the next frame starts clean
