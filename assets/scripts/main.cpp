@@ -222,6 +222,25 @@ int main(void)
     
     int NUM_BLOCKS = level.size();
 
+    struct RenderChunk {
+        GLuint listId;
+        bool dirty;
+        int startIdx;
+        int endIdx;
+    };
+    const int CHUNK_SIZE = 512;
+    std::vector<RenderChunk> chunks;
+    
+    // Generate initial chunks
+    for (int i = 0; i < NUM_BLOCKS; i += CHUNK_SIZE) {
+        RenderChunk chunk;
+        chunk.listId = glGenLists(1);
+        chunk.dirty = true;
+        chunk.startIdx = i;
+        chunk.endIdx = std::min(i + CHUNK_SIZE, NUM_BLOCKS);
+        chunks.push_back(chunk);
+    }
+
     // Hide the mouse cursor and lock it to the center of the window!
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     
@@ -234,6 +253,8 @@ int main(void)
     float lastPlaceTime = 0.0f;
     float currentBreakTime = 0.0f;
     float lastBreakSoundTime = 0.0f;
+    float lastBreakTime = 0.0f;
+    float breakCooldown = 0.25f;
     int currentBreakingBlockIndex = -1;
     float placeCooldown = 0.2f;
 
@@ -257,6 +278,9 @@ int main(void)
     if (ma_engine_init(NULL, &engine) != MA_SUCCESS) {
         cout << "Failed to initialize audio engine." << endl;
     }
+
+    // Setup Display List for Optimization
+    int lastBreakingBlockIndex = -1;
 
     /* Loop until the user closes the window */
     while (!glfwWindowShouldClose(window))
@@ -307,7 +331,7 @@ int main(void)
 
         // --- MOUSE CLICK INTERACTION ---
         bool leftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-        if (leftDown) {
+        if (leftDown && (currentFrameTime - lastBreakTime >= breakCooldown)) {
             float placeX, placeY, placeZ;
             int hitIndex = raycast(playerX, playerY, playerZ, playerPitch, playerYaw, level.data(), NUM_BLOCKS, 5.0f, 0.05f, placeX, placeY, placeZ);
             
@@ -340,11 +364,12 @@ int main(void)
                     }
 
                     if (currentBreakTime >= requiredBreakTime) {
-                        level.erase(level.begin() + hitIndex);
-                        NUM_BLOCKS = level.size();
+                        level[hitIndex].isActive = false; // instead of level.erase
+                        chunks[hitIndex / CHUNK_SIZE].dirty = true;
                         
                         currentBreakTime = 0.0f;
                         currentBreakingBlockIndex = -1;
+                        lastBreakTime = currentFrameTime;
                     }
                 } else {
                     currentBreakingBlockIndex = hitIndex;
@@ -392,8 +417,46 @@ int main(void)
                 };
                 
                 if (!isColliding(playerX, playerY, playerZ, playerRadius - 0.1f, playerHeight, newBlock)) {
-                    level.push_back(newBlock);
-                    NUM_BLOCKS = level.size();
+                    // Try to find an inactive block to replace
+                    int placedIndex = -1;
+                    for (int i = 0; i < NUM_BLOCKS; i++) {
+                        if (!level[i].isActive) {
+                            level[i] = newBlock;
+                            placedIndex = i;
+                            break;
+                        }
+                    }
+                    
+                    if (placedIndex == -1) {
+                        // Append to the level array if no inactive blocks found
+                        level.push_back(newBlock);
+                        placedIndex = NUM_BLOCKS;
+                        NUM_BLOCKS++;
+                        
+                        // See if we need to add to the last chunk, or make a new one
+                        if (chunks.empty()) {
+                            RenderChunk newChunk;
+                            newChunk.listId = glGenLists(1);
+                            newChunk.dirty = true;
+                            newChunk.startIdx = 0;
+                            newChunk.endIdx = 1;
+                            chunks.push_back(newChunk);
+                        } else {
+                            RenderChunk& last = chunks.back();
+                            if (last.endIdx - last.startIdx < CHUNK_SIZE) {
+                                last.endIdx++;
+                            } else {
+                                RenderChunk newChunk;
+                                newChunk.listId = glGenLists(1);
+                                newChunk.dirty = true;
+                                newChunk.startIdx = placedIndex;
+                                newChunk.endIdx = placedIndex + 1;
+                                chunks.push_back(newChunk);
+                            }
+                        }
+                    }
+                    
+                    chunks[placedIndex / CHUNK_SIZE].dirty = true;
                     lastPlaceTime = currentFrameTime;
                 }
             }
@@ -418,38 +481,58 @@ int main(void)
 
         glTranslatef(-playerX, -playerY, -playerZ);
 
-        // Draw all blocks in the level array!
-        for (int i = 0; i < NUM_BLOCKS; ++i) {
+        // Removed: We no longer recompile the whole world just to change the targeted block
+
+        // Recompile only the dirty chunks
+        for (auto& chunk : chunks) {
+            if (chunk.dirty) {
+                glNewList(chunk.listId, GL_COMPILE);
+                for (int i = chunk.startIdx; i < chunk.endIdx; ++i) {
+                    if (!level[i].isActive) continue;
+                    
+                    float tempPoints[6][4][3];
+                    getBlockPoints(level[i], tempPoints);
+                    draw_cube_texture(level[i].textureID, tempPoints, outlineColor, 1.0f, false, true, nullptr);
+                }
+                glEndList();
+                chunk.dirty = false;
+            }
+        }
+
+        // Draw all the chunks
+        for (const auto& chunk : chunks) {
+            glCallList(chunk.listId);
+        }
+
+        // Draw the block currently being broken, with its updated color
+        if (currentBreakingBlockIndex != -1 && currentBreakingBlockIndex < NUM_BLOCKS && level[currentBreakingBlockIndex].isActive) {
+            glDepthFunc(GL_LEQUAL); // Allows this drawing to perfectly overwrite the existing block
+            int i = currentBreakingBlockIndex;
             float tempPoints[6][4][3];
             getBlockPoints(level[i], tempPoints);
             
-            float* colorPtr = nullptr;
             float blockColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-
-            if (i == currentBreakingBlockIndex) {
-                float requiredBreakTime = 0.5f;
-                GLuint tex = level[i].textureID;
-                if (tex == grassTex || tex == dirtTex) {
-                    requiredBreakTime = 0.5f;
-                } else if (tex == oak_planksTex) {
-                    requiredBreakTime = 1.0f;
-                } else if (tex == stoneTex) {
-                    requiredBreakTime = 1.5f;
-                }
-                
-                float progress = currentBreakTime / requiredBreakTime;
-                if (progress > 1.0f) progress = 1.0f;
-                
-                // Color gets darker (more gray) as progress increases
-                float shade = 1.0f - (progress * 0.7f); // Drops down to 0.3 brightness
-                blockColor[0] = shade;
-                blockColor[1] = shade;
-                blockColor[2] = shade;
-                colorPtr = blockColor;
+            float requiredBreakTime = 0.5f;
+            GLuint tex = level[i].textureID;
+            if (tex == grassTex || tex == dirtTex) {
+                requiredBreakTime = 0.5f;
+            } else if (tex == oak_planksTex) {
+                requiredBreakTime = 1.0f;
+            } else if (tex == stoneTex) {
+                requiredBreakTime = 1.5f;
             }
-
-            // We pass "false" to disable outlines for performance
-            draw_cube_texture(level[i].textureID, tempPoints, outlineColor, 1.0f, false, true, colorPtr);
+            
+            float progress = currentBreakTime / requiredBreakTime;
+            if (progress > 1.0f) progress = 1.0f;
+            
+            float shade = 1.0f - (progress * 0.7f); // Drops down to 0.3 brightness
+            blockColor[0] = shade;
+            blockColor[1] = shade;
+            blockColor[2] = shade;
+            
+            draw_cube_texture(level[i].textureID, tempPoints, outlineColor, 1.0f, false, true, blockColor);
+            
+            glDepthFunc(GL_LESS); // Restore to default
         }
 
         // Reset the world back to normal so the next frame starts clean

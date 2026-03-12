@@ -41,6 +41,8 @@ int raycast(float startX, float startY, float startZ, float pitch, float yaw,
         currentZ = startZ + dirZ * dist;
 
         for (int i = 0; i < numBlocks; i++) {
+            if (!level[i].isActive) continue;
+
             if (currentX >= level[i].minX && currentX <= level[i].maxX &&
                 currentY >= level[i].minY && currentY <= level[i].maxY &&
                 currentZ >= level[i].minZ && currentZ <= level[i].maxZ) {

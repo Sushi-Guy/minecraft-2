@@ -4,6 +4,7 @@
 struct Block {
     float minX, maxX, minY, maxY, minZ, maxZ;
     GLuint textureID;
+    bool isActive = true; // For chunk optimization
 };
 
 #include <vector>
@@ -180,6 +181,8 @@ void draw_model(const Model& model, float defaultColor[4]) {
 }
 
 bool isColliding(float px, float py, float pz, float radius, float height, Block b) {
+    if (!b.isActive) return false;
+
     float pMinX = px - radius;
     float pMaxX = px + radius;
     float pMinY = py - height; // If py is eye-level, feet are at py - height
