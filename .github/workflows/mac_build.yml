@@ -14,6 +14,8 @@ jobs:
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v4
+      with:
+        persist-credentials: false
 
     - name: Install Dependencies
       run: |
@@ -25,13 +27,16 @@ jobs:
 
     - name: Package Application
       run: |
+        # Bundle the library
+        chmod +x bundle_mac.sh
+        ./bundle_mac.sh
+        
         # Create a folder to organize the build
         mkdir -p Mac_Build
         mv Minecraft_Mac_App Mac_Build/
+        # Move the newly bundles dylib
+        mv libglfw.3.dylib Mac_Build/
         cp -r assets Mac_Build/
-        
-        # If there are dependencies that need to be alongside the executable, copy them here
-        # (macOS usually bundles this in a .app, but a folder structure works too for simple games)
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4

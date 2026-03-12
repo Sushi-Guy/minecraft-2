@@ -2,7 +2,7 @@
 
 APP_NAME="Minecraft_Mac_App"
 LIB_NAME="libglfw.3.dylib"
-HOMEBREW_LIB_PATH="/opt/homebrew/opt/glfw/lib/${LIB_NAME}"
+HOMEBREW_LIB_PATH="$(brew --prefix)/opt/glfw/lib/${LIB_NAME}"
 
 # 1. Check if the executable exists
 if [ ! -f "${APP_NAME}" ]; then
