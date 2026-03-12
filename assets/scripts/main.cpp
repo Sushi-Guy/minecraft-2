@@ -177,7 +177,8 @@ int main(void)
                 curX, curX + blockSize,      // minX, maxX
                 -1.0f, -0.0f,                // minY, maxY (floor is 1 unit thick)
                 curZ, curZ + blockSize,      // minZ, maxZ
-                grassTex                     // textureID
+                grassTex,                    // textureID
+                true                         // isActive
             };
             
             level.push_back(newBlock);
@@ -194,7 +195,8 @@ int main(void)
                     curX, curX + blockSize,      // minX, maxX
                     (float)y - 1.0f, (float)y,   // minY, maxY
                     curZ, curZ + blockSize,      // minZ, maxZ
-                    dirtTex                      // textureID
+                    dirtTex,                     // textureID
+                    true                         // isActive
                 };
                 
                 level.push_back(newBlock);
@@ -212,7 +214,8 @@ int main(void)
                     curX, curX + blockSize,      // minX, maxX
                     (float)y - 1.0f, (float)y,   // minY, maxY
                     curZ, curZ + blockSize,      // minZ, maxZ
-                    stoneTex                      // textureID
+                    stoneTex,                     // textureID
+                    true                         // isActive
                 };
                 
                 level.push_back(newBlock);
@@ -413,7 +416,8 @@ int main(void)
                     gridX, gridX + blockSize,
                     gridY, gridY + 1.0f, // Make placed blocks 1 unit tall
                     gridZ, gridZ + blockSize,
-                    currentSelectedTexture
+                    currentSelectedTexture,
+                    true
                 };
                 
                 if (!isColliding(playerX, playerY, playerZ, playerRadius - 0.1f, playerHeight, newBlock)) {
