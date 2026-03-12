@@ -21,7 +21,7 @@ jobs:
 
     - name: Compile Game
       run: |
-        clang++ -std=c++11 assets/scripts/main.cpp dependencies/imgui/*.cpp dependencies/imgui/backends/imgui_impl_glfw.cpp dependencies/imgui/backends/imgui_impl_opengl2.cpp -I. -I./dependencies/imgui -I./dependencies/imgui/backends -I$(brew --prefix)/include -L$(brew --prefix)/lib -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo -lglfw -lglew -o Minecraft_Mac_App
+        clang++ -std=c++17 assets/scripts/main.cpp dependencies/imgui/*.cpp dependencies/imgui/backends/imgui_impl_glfw.cpp dependencies/imgui/backends/imgui_impl_opengl2.cpp -I. -I./dependencies/imgui -I./dependencies/imgui/backends -I$(brew --prefix)/include -L$(brew --prefix)/lib -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo -lglfw -lglew -o Minecraft_Mac_App
 
     - name: Package Application
       run: |
