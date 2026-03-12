@@ -16,6 +16,10 @@ jobs:
       uses: actions/checkout@v4
       with:
         persist-credentials: false
+      env:
+        # Workaround for GitHub macOS runner bug: force actions/checkout to use system git
+        # rather than the broken Homebrew git installation which causes exit code 128
+        GIT_EXEC_PATH: /usr/bin
 
     - name: Install Dependencies
       run: |
