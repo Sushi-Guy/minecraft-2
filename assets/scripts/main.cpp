@@ -462,6 +462,18 @@ int main(void)
                     
                     chunks[placedIndex / CHUNK_SIZE].dirty = true;
                     lastPlaceTime = currentFrameTime;
+
+                    // Play sound
+                    if(currentSelectedTexture == dirtTex || currentSelectedTexture == grassTex) {
+                        // Play dirt place sound
+                        ma_engine_play_sound(&engine, "assets/sounds/dirt_place.wav", NULL);
+                    } else if(currentSelectedTexture == stoneTex) {
+                        // Play stone place sound
+                        ma_engine_play_sound(&engine, "assets/sounds/stone_place.wav", NULL);
+                    } else if(currentSelectedTexture == oak_planksTex) {
+                        ma_engine_play_sound(&engine, "assets/sounds/wood_place.wav", NULL);
+                    }
+
                 }
             }
         }
@@ -469,9 +481,6 @@ int main(void)
 
         float outlineColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
         float defaultModelColor[4] = {1.0f, 1.0f, 0.0f, 1.0f};
-
-        // Allow user to press ESCAPE to close window (since they can't click the X anymore!)
-        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
         
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
