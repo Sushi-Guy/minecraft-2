@@ -20,6 +20,8 @@
 
 using namespace std;
 
+enum GameState { STATE_MAIN_MENU, STATE_IN_GAME };
+
 int main(void)
 {
     GLFWwindow* window;
@@ -178,8 +180,8 @@ int main(void)
         chunks.push_back(chunk);
     }
 
-    // Hide the mouse cursor and lock it to the center of the window!
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    // The cursor is visible in the main menu!
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     
     // Keep track of where the mouse was last frame
     double lastMouseX, lastMouseY;
@@ -219,6 +221,8 @@ int main(void)
     // Setup Display List for Optimization
     int lastBreakingBlockIndex = -1;
 
+    GameState currentState = STATE_MAIN_MENU;
+
     /* Loop until the user closes the window */
     while (!glfwWindowShouldClose(window))
     {
@@ -241,7 +245,14 @@ int main(void)
         float deltaTime = currentFrameTime - lastFrameTime; // How much time passed since last loop?
         lastFrameTime = currentFrameTime;
 
-        player_movement_update(window, playerX, playerY, playerZ, 
+        if (currentState == STATE_IN_GAME) {
+            // Check for pause
+            if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+                currentState = STATE_MAIN_MENU;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            }
+
+            player_movement_update(window, playerX, playerY, playerZ, 
                                playerVelocityY, playerYaw, playerPitch, 
                                speed, gravity, jumpVelocity, 
                                playerHeight, playerRadius, isOnGround,
@@ -273,14 +284,16 @@ int main(void)
             level, NUM_BLOCKS, chunks, CHUNK_SIZE,
             grassTex, dirtTex, stoneTex, oak_planksTex, currentSelectedTexture,
             &engine, blockSize, leftMousePressed, rightMousePressed);
+        }
 
         float outlineColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
         float defaultModelColor[4] = {1.0f, 1.0f, 0.0f, 1.0f};
         
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        float lightPos[] = { 10.0f, 20.0f, 10.0f, 1.0f };
-        glLightfv(GL_LIGHT0, GL_POSITION, lightPos);
+        if (currentState == STATE_IN_GAME) {
+            float lightPos[] = { 10.0f, 20.0f, 10.0f, 1.0f };
+            glLightfv(GL_LIGHT0, GL_POSITION, lightPos);
 
         glPushMatrix();
 
@@ -385,15 +398,55 @@ int main(void)
         glMatrixMode(GL_PROJECTION);
         glPopMatrix();
         glMatrixMode(GL_MODELVIEW);
+        }
 
         // Render ImGui UI on top of everything
-        ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(250, 70), ImGuiCond_Always);
-        
-        // We can optionally add flags like ImGuiWindowFlags_NoTitleBar if you don't want a top bar at all!
-        ImGui::Begin("HUD", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground);
-        ImGui::Text("FPS: %d, Selected: %s", lastFps, blockName.c_str());
-        ImGui::End();
+        if (currentState == STATE_IN_GAME) {
+            ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(250, 70), ImGuiCond_Always);
+            
+            // We can optionally add flags like ImGuiWindowFlags_NoTitleBar if you don't want a top bar at all!
+            ImGui::Begin("HUD", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground);
+            ImGui::Text("FPS: %d, Selected: %s", lastFps, blockName.c_str());
+            ImGui::End();
+        } else if (currentState == STATE_MAIN_MENU) {
+            int winW, winH;
+            glfwGetFramebufferSize(window, &winW, &winH);
+            
+            ImVec2 window_size = ImVec2(300, 200);
+            ImGui::SetNextWindowSize(window_size, ImGuiCond_Always);
+            ImGui::SetNextWindowPos(ImVec2((winW - window_size.x) * 0.5f, (winH - window_size.y) * 0.5f), ImGuiCond_Always);
+            
+            ImGui::Begin("Main Menu", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
+            
+            ImVec2 title_size = ImGui::CalcTextSize("Minecraft 2.0");
+            ImGui::SetCursorPosX((window_size.x - title_size.x) * 0.5f);
+            ImGui::Text("Minecraft 2.0");
+            
+            ImGui::Spacing();
+            ImGui::Spacing();
+            
+            float btn_w = 200.0f;
+            ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
+            if (ImGui::Button("Play", ImVec2(btn_w, 40))) {
+                currentState = STATE_IN_GAME;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                
+                // Prevent large camera jump by resetting last mouse position
+                glfwGetCursorPos(window, &lastMouseX, &lastMouseY);
+                // Also reset frame time to avoid huge delta time
+                lastFrameTime = glfwGetTime();
+            }
+            
+            ImGui::Spacing();
+            
+            ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
+            if (ImGui::Button("Quit", ImVec2(btn_w, 40))) {
+                glfwSetWindowShouldClose(window, true);
+            }
+            
+            ImGui::End();
+        }
 
         ImGui::Render();
         ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
