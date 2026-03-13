@@ -4,8 +4,9 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 
-#include "object_loader.h"
+#include "rendering.h"
 #include "player.h"
+#include "interactions.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -18,68 +19,6 @@
 #include "imgui_impl_opengl2.h"
 
 using namespace std;
-
-GLuint loadTexture(const char* filepath) {
-    int width, height, nrChannels;
-    unsigned char *data = stbi_load(filepath, &width, &height, &nrChannels, 0);
-    if (!data) {
-        cout << "Failed to load texture: " << filepath << endl;
-        return 0;
-    }
-
-    GLuint texture;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);	
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-    GLenum format = GL_RGB;
-    if (nrChannels == 4) format = GL_RGBA;
-
-    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
-    
-    stbi_image_free(data);
-    return texture;
-}
-
-void getBlockPoints(Block b, float points[6][4][3]) {
-    // We define all faces in Counter-Clockwise (CCW) order: Bottom-Left, Bottom-Right, Top-Right, Top-Left
-    
-    // Front face (Z = maxZ)
-    points[0][0][0] = b.minX; points[0][0][1] = b.minY; points[0][0][2] = b.maxZ;
-    points[0][1][0] = b.maxX; points[0][1][1] = b.minY; points[0][1][2] = b.maxZ;
-    points[0][2][0] = b.maxX; points[0][2][1] = b.maxY; points[0][2][2] = b.maxZ;
-    points[0][3][0] = b.minX; points[0][3][1] = b.maxY; points[0][3][2] = b.maxZ;
-    // Back face (Z = minZ)
-    points[1][0][0] = b.maxX; points[1][0][1] = b.minY; points[1][0][2] = b.minZ;
-    points[1][1][0] = b.minX; points[1][1][1] = b.minY; points[1][1][2] = b.minZ;
-    points[1][2][0] = b.minX; points[1][2][1] = b.maxY; points[1][2][2] = b.minZ;
-    points[1][3][0] = b.maxX; points[1][3][1] = b.maxY; points[1][3][2] = b.minZ;
-    // Top face (Y = maxY)
-    points[2][0][0] = b.minX; points[2][0][1] = b.maxY; points[2][0][2] = b.maxZ;
-    points[2][1][0] = b.maxX; points[2][1][1] = b.maxY; points[2][1][2] = b.maxZ;
-    points[2][2][0] = b.maxX; points[2][2][1] = b.maxY; points[2][2][2] = b.minZ;
-    points[2][3][0] = b.minX; points[2][3][1] = b.maxY; points[2][3][2] = b.minZ;
-    // Bottom face (Y = minY)
-    points[3][0][0] = b.minX; points[3][0][1] = b.minY; points[3][0][2] = b.minZ;
-    points[3][1][0] = b.maxX; points[3][1][1] = b.minY; points[3][1][2] = b.minZ;
-    points[3][2][0] = b.maxX; points[3][2][1] = b.minY; points[3][2][2] = b.maxZ;
-    points[3][3][0] = b.minX; points[3][3][1] = b.minY; points[3][3][2] = b.maxZ;
-    // Left face (X = minX)
-    points[4][0][0] = b.minX; points[4][0][1] = b.minY; points[4][0][2] = b.minZ;
-    points[4][1][0] = b.minX; points[4][1][1] = b.minY; points[4][1][2] = b.maxZ;
-    points[4][2][0] = b.minX; points[4][2][1] = b.maxY; points[4][2][2] = b.maxZ;
-    points[4][3][0] = b.minX; points[4][3][1] = b.maxY; points[4][3][2] = b.minZ;
-    // Right face (X = maxX)
-    points[5][0][0] = b.maxX; points[5][0][1] = b.minY; points[5][0][2] = b.maxZ;
-    points[5][1][0] = b.maxX; points[5][1][1] = b.minY; points[5][1][2] = b.minZ;
-    points[5][2][0] = b.maxX; points[5][2][1] = b.maxY; points[5][2][2] = b.minZ;
-    points[5][3][0] = b.maxX; points[5][3][1] = b.maxY; points[5][3][2] = b.maxZ;
-}
 
 int main(void)
 {
@@ -140,7 +79,7 @@ int main(void)
     float gravity = 15.0f;
     float jumpVelocity = 6.2f;
     float playerHeight = 1.5f; // Eye level above ground
-    float playerRadius = 0.2f; // Player hit box radius
+    float playerRadius = 0.3f; // Player hit box radius
     bool isOnGround = false;
 
     // Define Level Blocks Dynamically
@@ -225,12 +164,7 @@ int main(void)
     
     int NUM_BLOCKS = level.size();
 
-    struct RenderChunk {
-        GLuint listId;
-        bool dirty;
-        int startIdx;
-        int endIdx;
-    };
+
     const int CHUNK_SIZE = 512;
     std::vector<RenderChunk> chunks;
     
@@ -333,151 +267,12 @@ int main(void)
         }
 
         // --- MOUSE CLICK INTERACTION ---
-        bool leftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-        if (leftDown && (currentFrameTime - lastBreakTime >= breakCooldown)) {
-            float placeX, placeY, placeZ;
-            int hitIndex = raycast(playerX, playerY, playerZ, playerPitch, playerYaw, level.data(), NUM_BLOCKS, 5.0f, 0.05f, placeX, placeY, placeZ);
-            
-            if (hitIndex != -1) {
-                if (hitIndex == currentBreakingBlockIndex) {
-                    currentBreakTime += deltaTime;
-                    
-                    if (currentBreakTime - lastBreakSoundTime >= 0.25f) {
-                        GLuint hitTexture = level[hitIndex].textureID;
-                        if (hitTexture == grassTex || hitTexture == dirtTex) {
-                            ma_engine_play_sound(&engine, "assets/sounds/dirt_break.wav", NULL);
-                        } else if (hitTexture == stoneTex) {
-                            ma_engine_play_sound(&engine, "assets/sounds/stone_break.wav", NULL);
-                        } else if (hitTexture == oak_planksTex) {
-                            ma_engine_play_sound(&engine, "assets/sounds/wood_break.wav", NULL);
-                        } else {
-                            ma_engine_play_sound(&engine, "assets/sounds/default_break.wav", NULL);
-                        }
-                        lastBreakSoundTime = currentBreakTime;
-                    }
-
-                    float requiredBreakTime = 0.5f;
-                    GLuint tex = level[hitIndex].textureID;
-                    if (tex == grassTex || tex == dirtTex) {
-                        requiredBreakTime = 0.5f;
-                    } else if (tex == oak_planksTex) {
-                        requiredBreakTime = 1.0f;
-                    } else if (tex == stoneTex) {
-                        requiredBreakTime = 1.5f;
-                    }
-
-                    if (currentBreakTime >= requiredBreakTime) {
-                        level[hitIndex].isActive = false; // instead of level.erase
-                        chunks[hitIndex / CHUNK_SIZE].dirty = true;
-                        
-                        currentBreakTime = 0.0f;
-                        currentBreakingBlockIndex = -1;
-                        lastBreakTime = currentFrameTime;
-                    }
-                } else {
-                    currentBreakingBlockIndex = hitIndex;
-                    currentBreakTime = deltaTime;
-                    lastBreakSoundTime = 0.0f;
-                    
-                    GLuint hitTexture = level[hitIndex].textureID;
-                    if (hitTexture == grassTex || hitTexture == dirtTex) {
-                        ma_engine_play_sound(&engine, "assets/sounds/dirt_break.wav", NULL);
-                    } else if (hitTexture == stoneTex) {
-                        ma_engine_play_sound(&engine, "assets/sounds/stone_break.wav", NULL);
-                    } else if (hitTexture == oak_planksTex) {
-                        ma_engine_play_sound(&engine, "assets/sounds/wood_break.wav", NULL);
-                    } else {
-                        ma_engine_play_sound(&engine, "assets/sounds/default_break.wav", NULL);
-                    }
-                }
-            } else {
-                currentBreakingBlockIndex = -1;
-                currentBreakTime = 0.0f;
-            }
-        } else {
-            currentBreakingBlockIndex = -1;
-            currentBreakTime = 0.0f;
-        }
-        leftMousePressed = leftDown;
-
-        bool rightDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-        if (rightDown && (currentFrameTime - lastPlaceTime >= placeCooldown)) {
-            float placeX, placeY, placeZ;
-            int hitIndex = raycast(playerX, playerY, playerZ, playerPitch, playerYaw, level.data(), NUM_BLOCKS, 5.0f, 0.05f, placeX, placeY, placeZ);
-            if (hitIndex != -1) {
-                // Determine placement based on grid alignment (rounding to nearest blockSize boundary)
-                float gridX = floor(placeX / blockSize) * blockSize;
-                float gridY = floor(placeY / blockSize) * blockSize; // Might need special tweak if floor is Y: -1 to 0
-                float gridZ = floor(placeZ / blockSize) * blockSize;
-
-                // Adjust gridY if it's the floor, since floor blocks are 1 unit thick but go from -1 to 0
-                // For simplicity, let's just make new blocks 1x1x1
-                Block newBlock = {
-                    gridX, gridX + blockSize,
-                    gridY, gridY + 1.0f, // Make placed blocks 1 unit tall
-                    gridZ, gridZ + blockSize,
-                    currentSelectedTexture,
-                    true
-                };
-                
-                if (!isColliding(playerX, playerY, playerZ, playerRadius - 0.1f, playerHeight, newBlock)) {
-                    // Try to find an inactive block to replace
-                    int placedIndex = -1;
-                    for (int i = 0; i < NUM_BLOCKS; i++) {
-                        if (!level[i].isActive) {
-                            level[i] = newBlock;
-                            placedIndex = i;
-                            break;
-                        }
-                    }
-                    
-                    if (placedIndex == -1) {
-                        // Append to the level array if no inactive blocks found
-                        level.push_back(newBlock);
-                        placedIndex = NUM_BLOCKS;
-                        NUM_BLOCKS++;
-                        
-                        // See if we need to add to the last chunk, or make a new one
-                        if (chunks.empty()) {
-                            RenderChunk newChunk;
-                            newChunk.listId = glGenLists(1);
-                            newChunk.dirty = true;
-                            newChunk.startIdx = 0;
-                            newChunk.endIdx = 1;
-                            chunks.push_back(newChunk);
-                        } else {
-                            RenderChunk& last = chunks.back();
-                            if (last.endIdx - last.startIdx < CHUNK_SIZE) {
-                                last.endIdx++;
-                            } else {
-                                RenderChunk newChunk;
-                                newChunk.listId = glGenLists(1);
-                                newChunk.dirty = true;
-                                newChunk.startIdx = placedIndex;
-                                newChunk.endIdx = placedIndex + 1;
-                                chunks.push_back(newChunk);
-                            }
-                        }
-                    }
-                    
-                    chunks[placedIndex / CHUNK_SIZE].dirty = true;
-                    lastPlaceTime = currentFrameTime;
-
-                    // Play sound
-                    if(currentSelectedTexture == dirtTex || currentSelectedTexture == grassTex) {
-                        // Play dirt place sound
-                        ma_engine_play_sound(&engine, "assets/sounds/dirt_place.wav", NULL);
-                    } else if(currentSelectedTexture == stoneTex) {
-                        // Play stone place sound
-                        ma_engine_play_sound(&engine, "assets/sounds/stone_place.wav", NULL);
-                    } else if(currentSelectedTexture == oak_planksTex) {
-                        ma_engine_play_sound(&engine, "assets/sounds/wood_place.wav", NULL);
-                    }
-
-                }
-            }
-        }
-        rightMousePressed = rightDown;
+        handleMouseInteractions(window, currentFrameTime, deltaTime, lastBreakTime, breakCooldown, 
+            currentBreakingBlockIndex, currentBreakTime, lastBreakSoundTime, lastPlaceTime, placeCooldown,
+            playerX, playerY, playerZ, playerPitch, playerYaw, playerRadius, playerHeight,
+            level, NUM_BLOCKS, chunks, CHUNK_SIZE,
+            grassTex, dirtTex, stoneTex, oak_planksTex, currentSelectedTexture,
+            &engine, blockSize, leftMousePressed, rightMousePressed);
 
         float outlineColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
         float defaultModelColor[4] = {1.0f, 1.0f, 0.0f, 1.0f};

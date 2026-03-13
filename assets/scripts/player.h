@@ -2,8 +2,22 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include "../../dependencies/miniaudio.h"
-#include "object_loader.h"
-bool isColliding(float px, float py, float pz, float radius, float height, Block b);
+#include "rendering.h"
+
+inline bool isColliding(float px, float py, float pz, float radius, float height, Block b) {
+    if (!b.isActive) return false;
+
+    float pMinX = px - radius;
+    float pMaxX = px + radius;
+    float pMinY = py - height; // If py is eye-level, feet are at py - height
+    float pMaxY = py + 0.2f;   // Head is a bit above eye level
+    float pMinZ = pz - radius;
+    float pMaxZ = pz + radius;
+
+    return (pMinX < b.maxX && pMaxX > b.minX) &&
+           (pMinY < b.maxY && pMaxY > b.minY) &&
+           (pMinZ < b.maxZ && pMaxZ > b.minZ);
+}
 
 // Raycasts from the player's camera to find the first block hit.
 // Returns the index of the block in the array, or -1 if nothing is hit.

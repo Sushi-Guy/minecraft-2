@@ -7,11 +7,81 @@ struct Block {
     bool isActive = true; // For chunk optimization
 };
 
+struct RenderChunk {
+    GLuint listId;
+    bool dirty;
+    int startIdx;
+    int endIdx;
+};
+
 #include <vector>
 #include <string>
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include "stb_image.h"
+
+inline GLuint loadTexture(const char* filepath) {
+    int width, height, nrChannels;
+    unsigned char *data = stbi_load(filepath, &width, &height, &nrChannels, 0);
+    if (!data) {
+        std::cout << "Failed to load texture: " << filepath << std::endl;
+        return 0;
+    }
+
+    GLuint texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);	
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    GLenum format = GL_RGB;
+    if (nrChannels == 4) format = GL_RGBA;
+
+    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+    
+    stbi_image_free(data);
+    return texture;
+}
+
+inline void getBlockPoints(Block b, float points[6][4][3]) {
+    // We define all faces in Counter-Clockwise (CCW) order: Bottom-Left, Bottom-Right, Top-Right, Top-Left
+    
+    // Front face (Z = maxZ)
+    points[0][0][0] = b.minX; points[0][0][1] = b.minY; points[0][0][2] = b.maxZ;
+    points[0][1][0] = b.maxX; points[0][1][1] = b.minY; points[0][1][2] = b.maxZ;
+    points[0][2][0] = b.maxX; points[0][2][1] = b.maxY; points[0][2][2] = b.maxZ;
+    points[0][3][0] = b.minX; points[0][3][1] = b.maxY; points[0][3][2] = b.maxZ;
+    // Back face (Z = minZ)
+    points[1][0][0] = b.maxX; points[1][0][1] = b.minY; points[1][0][2] = b.minZ;
+    points[1][1][0] = b.minX; points[1][1][1] = b.minY; points[1][1][2] = b.minZ;
+    points[1][2][0] = b.minX; points[1][2][1] = b.maxY; points[1][2][2] = b.minZ;
+    points[1][3][0] = b.maxX; points[1][3][1] = b.maxY; points[1][3][2] = b.minZ;
+    // Top face (Y = maxY)
+    points[2][0][0] = b.minX; points[2][0][1] = b.maxY; points[2][0][2] = b.maxZ;
+    points[2][1][0] = b.maxX; points[2][1][1] = b.maxY; points[2][1][2] = b.maxZ;
+    points[2][2][0] = b.maxX; points[2][2][1] = b.maxY; points[2][2][2] = b.minZ;
+    points[2][3][0] = b.minX; points[2][3][1] = b.maxY; points[2][3][2] = b.minZ;
+    // Bottom face (Y = minY)
+    points[3][0][0] = b.minX; points[3][0][1] = b.minY; points[3][0][2] = b.minZ;
+    points[3][1][0] = b.maxX; points[3][1][1] = b.minY; points[3][1][2] = b.minZ;
+    points[3][2][0] = b.maxX; points[3][2][1] = b.minY; points[3][2][2] = b.maxZ;
+    points[3][3][0] = b.minX; points[3][3][1] = b.minY; points[3][3][2] = b.maxZ;
+    // Left face (X = minX)
+    points[4][0][0] = b.minX; points[4][0][1] = b.minY; points[4][0][2] = b.minZ;
+    points[4][1][0] = b.minX; points[4][1][1] = b.minY; points[4][1][2] = b.maxZ;
+    points[4][2][0] = b.minX; points[4][2][1] = b.maxY; points[4][2][2] = b.maxZ;
+    points[4][3][0] = b.minX; points[4][3][1] = b.maxY; points[4][3][2] = b.minZ;
+    // Right face (X = maxX)
+    points[5][0][0] = b.maxX; points[5][0][1] = b.minY; points[5][0][2] = b.maxZ;
+    points[5][1][0] = b.maxX; points[5][1][1] = b.minY; points[5][1][2] = b.minZ;
+    points[5][2][0] = b.maxX; points[5][2][1] = b.maxY; points[5][2][2] = b.minZ;
+    points[5][3][0] = b.maxX; points[5][3][1] = b.maxY; points[5][3][2] = b.maxZ;
+}
 
 struct Material {
     std::string name;
@@ -180,20 +250,7 @@ void draw_model(const Model& model, float defaultColor[4]) {
     glEnd();
 }
 
-bool isColliding(float px, float py, float pz, float radius, float height, Block b) {
-    if (!b.isActive) return false;
 
-    float pMinX = px - radius;
-    float pMaxX = px + radius;
-    float pMinY = py - height; // If py is eye-level, feet are at py - height
-    float pMaxY = py + 0.2f;   // Head is a bit above eye level
-    float pMinZ = pz - radius;
-    float pMaxZ = pz + radius;
-
-    return (pMinX < b.maxX && pMaxX > b.minX) &&
-           (pMinY < b.maxY && pMaxY > b.minY) &&
-           (pMinZ < b.maxZ && pMaxZ > b.minZ);
-}
 
 void draw_triangle_color(float color[4], float points[3][3], float thickness, float outlineColor[4], bool activated) {
     glBegin(GL_TRIANGLES);
