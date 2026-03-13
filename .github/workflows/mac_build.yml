@@ -33,8 +33,8 @@ jobs:
         mkdir -p Mac_Build
         mv Minecraft_Mac_App Mac_Build/
         # Move the newly bundled dylibs
-        mv libglfw.3.dylib Mac_Build/
-        mv libGLEW.2.2.dylib Mac_Build/
+        mv libglfw.*.dylib Mac_Build/
+        mv libGLEW.*.dylib Mac_Build/
         cp -r assets Mac_Build/
 
     - name: Upload Artifact

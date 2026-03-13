@@ -1,10 +1,15 @@
 #!/bin/bash
 
 APP_NAME="Minecraft_Mac_App"
-LIB_NAME="libglfw.3.dylib"
-GLEW_LIB_NAME="libGLEW.2.2.dylib"
-HOMEBREW_LIB_PATH="$(brew --prefix)/opt/glfw/lib/${LIB_NAME}"
-HOMEBREW_GLEW_PATH="$(brew --prefix)/opt/glew/lib/${GLEW_LIB_NAME}"
+# Find the actual versions installed by Homebrew
+GLFW_LIB_PATH=$(find "$(brew --prefix)/opt/glfw/lib" -name "libglfw.*.dylib" | head -n 1)
+GLEW_LIB_PATH=$(find "$(brew --prefix)/opt/glew/lib" -name "libGLEW.*.dylib" ! -name "libGLEW.dylib" | head -n 1)
+
+LIB_NAME=$(basename "$GLFW_LIB_PATH")
+GLEW_LIB_NAME=$(basename "$GLEW_LIB_PATH")
+
+HOMEBREW_LIB_PATH="$GLFW_LIB_PATH"
+HOMEBREW_GLEW_PATH="$GLEW_LIB_PATH"
 
 # 1. Check if the executable exists
 if [ ! -f "${APP_NAME}" ]; then
