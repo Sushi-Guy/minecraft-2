@@ -1,6 +1,8 @@
 #include <iostream>
 #include <cmath>
 #include <string>
+#include <vector>
+#include <mutex>
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 
@@ -17,6 +19,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl2.h"
+#include "nakama_client.h"
 
 using namespace std;
 
@@ -24,6 +27,21 @@ enum GameState { STATE_MAIN_MENU, STATE_IN_GAME };
 
 int main(void)
 {
+    // Initialize Nakama Client
+    NakamaClient nakamaClient("defaultkey", "127.0.0.1", 7350);
+    NakamaSession nakamaSession;
+    bool nakamaAuthPending = false; // Flag to handle auth on the main thread
+    float lastPositionSendTime = 0.0f;
+    float positionSendInterval = 0.1f; // Send position 10 times per second
+    float lastPositionPollTime = 0.0f;
+    float positionPollInterval = 0.15f; // Poll for others 6-7 times per second
+    float lastBlockEventPollTime = 0.0f;
+    float blockEventPollInterval = 0.2f; // Poll for block changes 5 times per second
+
+    // Block events from remote players, applied on main thread
+    std::mutex blockEventMutex;
+    std::vector<BlockEvent> pendingBlockEvents;
+
     GLFWwindow* window;
 
     if (!glfwInit()) {
@@ -99,6 +117,24 @@ int main(void)
     GLuint dirtTex = loadTexture("assets/textures/dirt.png");
     GLuint stoneTex = loadTexture("assets/textures/stone.png");
     GLuint oak_planksTex = loadTexture("assets/textures/oak_planks.png");
+
+    // Texture ID helpers: OpenGL texture handles differ between instances,
+    // so we use a stable 0-3 integer for network serialization.
+    auto texToNetId = [&](GLuint tex) -> int {
+        if (tex == grassTex)     return 0;
+        if (tex == dirtTex)      return 1;
+        if (tex == stoneTex)     return 2;
+        if (tex == oak_planksTex) return 3;
+        return 0; // default
+    };
+    auto netIdToTex = [&](int id) -> GLuint {
+        switch (id) {
+            case 1: return dirtTex;
+            case 2: return stoneTex;
+            case 3: return oak_planksTex;
+            default: return grassTex;
+        }
+    };
 
     GLuint currentSelectedTexture = grassTex;
 
@@ -231,6 +267,21 @@ int main(void)
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
+        // Nakama uses background threads, no tick needed
+
+        // Check if Nakama auth completed (must handle GLFW calls on main thread)
+        if (nakamaAuthPending) {
+            nakamaAuthPending = false;
+            currentState = STATE_IN_GAME;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            glfwGetCursorPos(window, &lastMouseX, &lastMouseY);
+            lastFrameTime = glfwGetTime();
+
+            // Join multiplayer: start sending/receiving positions via storage
+            nakamaClient.inMatch = true;
+            std::cout << "Multiplayer active! Your user ID: " << nakamaSession.userId << std::endl;
+        }
+
         // --- FPS CALCULATION ---
         fpsFrames++;
         float currentFpsTime = glfwGetTime();
@@ -283,7 +334,67 @@ int main(void)
             playerX, playerY, playerZ, playerPitch, playerYaw, playerRadius, playerHeight,
             level, NUM_BLOCKS, chunks, CHUNK_SIZE,
             grassTex, dirtTex, stoneTex, oak_planksTex, currentSelectedTexture,
-            &engine, blockSize, leftMousePressed, rightMousePressed);
+            &engine, blockSize, leftMousePressed, rightMousePressed,
+            // onBlockBreak
+            [&](int idx) { nakamaClient.sendBlockBreak(nakamaSession, idx); },
+            // onBlockPlace
+            [&](float minX, float maxX, float minY, float maxY, float minZ, float maxZ, int texId) {
+                nakamaClient.sendBlockPlace(nakamaSession, minX, maxX, minY, maxY, minZ, maxZ, texToNetId((GLuint)texId));
+            }
+        );
+
+        // --- MULTIPLAYER: Send our position, poll for others, poll block events ---
+        if (nakamaSession.isValid && nakamaClient.inMatch) {
+            if (currentFrameTime - lastPositionSendTime >= positionSendInterval) {
+                nakamaClient.sendPosition(nakamaSession, playerX, playerY, playerZ, playerYaw, playerPitch);
+                lastPositionSendTime = currentFrameTime;
+            }
+            if (currentFrameTime - lastPositionPollTime >= positionPollInterval) {
+                nakamaClient.pollPositions(nakamaSession);
+                lastPositionPollTime = currentFrameTime;
+            }
+            if (currentFrameTime - lastBlockEventPollTime >= blockEventPollInterval) {
+                nakamaClient.pollBlockEvents(nakamaSession, [&](const BlockEvent& ev) {
+                    std::lock_guard<std::mutex> lock(blockEventMutex);
+                    pendingBlockEvents.push_back(ev);
+                });
+                lastBlockEventPollTime = currentFrameTime;
+            }
+        }
+
+        // --- Apply pending block events on the main thread ---
+        {
+            std::lock_guard<std::mutex> lock(blockEventMutex);
+            for (const auto& ev : pendingBlockEvents) {
+                if (ev.type == "break") {
+                    if (ev.index >= 0 && ev.index < NUM_BLOCKS) {
+                        level[ev.index].isActive = false;
+                        chunks[ev.index / CHUNK_SIZE].dirty = true;
+                    }
+                } else if (ev.type == "place") {
+                    Block newBlock = { ev.minX, ev.maxX, ev.minY, ev.maxY, ev.minZ, ev.maxZ,
+                                      netIdToTex(ev.textureId), true };
+                    // Find a free slot or append
+                    int placedIndex = -1;
+                    for (int i = 0; i < NUM_BLOCKS; i++) {
+                        if (!level[i].isActive) { level[i] = newBlock; placedIndex = i; break; }
+                    }
+                    if (placedIndex == -1) {
+                        level.push_back(newBlock);
+                        placedIndex = NUM_BLOCKS++;
+                        if (!chunks.empty() && (chunks.back().endIdx - chunks.back().startIdx) < CHUNK_SIZE) {
+                            chunks.back().endIdx++;
+                        } else {
+                            RenderChunk nc; nc.listId = glGenLists(1); nc.dirty = true;
+                            nc.startIdx = placedIndex; nc.endIdx = placedIndex + 1;
+                            chunks.push_back(nc);
+                        }
+                    }
+                    chunks[placedIndex / CHUNK_SIZE].dirty = true;
+                }
+            }
+            pendingBlockEvents.clear();
+        }
         }
 
         float outlineColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
@@ -356,6 +467,90 @@ int main(void)
             glDepthFunc(GL_LESS); // Restore to default
         }
 
+        // --- DRAW OTHER PLAYERS ---
+        {
+            auto players = nakamaClient.getRemotePlayers();
+            for (const auto& pair : players) {
+                const RemotePlayer& rp = pair.second;
+                glPushMatrix();
+                // Position the player (feet position, offset Y down by half the player height)
+                glTranslatef(rp.x, rp.y - 0.75f, rp.z);
+                
+                // Draw a simple colored box to represent the player
+                float playerWidth = 0.4f;
+                float playerBodyHeight = 1.5f;
+                glDisable(GL_TEXTURE_2D);
+                glColor3f(0.2f, 0.6f, 1.0f); // Blue player color
+                
+                glBegin(GL_QUADS);
+                // Front
+                glVertex3f(-playerWidth, 0, playerWidth);
+                glVertex3f(playerWidth, 0, playerWidth);
+                glVertex3f(playerWidth, playerBodyHeight, playerWidth);
+                glVertex3f(-playerWidth, playerBodyHeight, playerWidth);
+                // Back
+                glVertex3f(playerWidth, 0, -playerWidth);
+                glVertex3f(-playerWidth, 0, -playerWidth);
+                glVertex3f(-playerWidth, playerBodyHeight, -playerWidth);
+                glVertex3f(playerWidth, playerBodyHeight, -playerWidth);
+                // Left
+                glVertex3f(-playerWidth, 0, -playerWidth);
+                glVertex3f(-playerWidth, 0, playerWidth);
+                glVertex3f(-playerWidth, playerBodyHeight, playerWidth);
+                glVertex3f(-playerWidth, playerBodyHeight, -playerWidth);
+                // Right
+                glVertex3f(playerWidth, 0, playerWidth);
+                glVertex3f(playerWidth, 0, -playerWidth);
+                glVertex3f(playerWidth, playerBodyHeight, -playerWidth);
+                glVertex3f(playerWidth, playerBodyHeight, playerWidth);
+                // Top
+                glVertex3f(-playerWidth, playerBodyHeight, playerWidth);
+                glVertex3f(playerWidth, playerBodyHeight, playerWidth);
+                glVertex3f(playerWidth, playerBodyHeight, -playerWidth);
+                glVertex3f(-playerWidth, playerBodyHeight, -playerWidth);
+                // Bottom
+                glVertex3f(-playerWidth, 0, -playerWidth);
+                glVertex3f(playerWidth, 0, -playerWidth);
+                glVertex3f(playerWidth, 0, playerWidth);
+                glVertex3f(-playerWidth, 0, playerWidth);
+                glEnd();
+                
+                // Draw a head (smaller cube on top)
+                glColor3f(0.9f, 0.7f, 0.5f); // Skin-ish color
+                float headSize = 0.3f;
+                float headY = playerBodyHeight;
+                glBegin(GL_QUADS);
+                // Front
+                glVertex3f(-headSize, headY, headSize);
+                glVertex3f(headSize, headY, headSize);
+                glVertex3f(headSize, headY + headSize*2, headSize);
+                glVertex3f(-headSize, headY + headSize*2, headSize);
+                // Back
+                glVertex3f(headSize, headY, -headSize);
+                glVertex3f(-headSize, headY, -headSize);
+                glVertex3f(-headSize, headY + headSize*2, -headSize);
+                glVertex3f(headSize, headY + headSize*2, -headSize);
+                // Left
+                glVertex3f(-headSize, headY, -headSize);
+                glVertex3f(-headSize, headY, headSize);
+                glVertex3f(-headSize, headY + headSize*2, headSize);
+                glVertex3f(-headSize, headY + headSize*2, -headSize);
+                // Right
+                glVertex3f(headSize, headY, headSize);
+                glVertex3f(headSize, headY, -headSize);
+                glVertex3f(headSize, headY + headSize*2, -headSize);
+                glVertex3f(headSize, headY + headSize*2, headSize);
+                // Top
+                glVertex3f(-headSize, headY + headSize*2, headSize);
+                glVertex3f(headSize, headY + headSize*2, headSize);
+                glVertex3f(headSize, headY + headSize*2, -headSize);
+                glVertex3f(-headSize, headY + headSize*2, -headSize);
+                glEnd();
+                
+                glPopMatrix();
+            }
+        }
+
         // Reset the world back to normal so the next frame starts clean
         glPopMatrix();
 
@@ -407,7 +602,8 @@ int main(void)
             
             // We can optionally add flags like ImGuiWindowFlags_NoTitleBar if you don't want a top bar at all!
             ImGui::Begin("HUD", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground);
-            ImGui::Text("FPS: %d, Selected: %s", lastFps, blockName.c_str());
+            auto players = nakamaClient.getRemotePlayers();
+            ImGui::Text("FPS: %d, Selected: %s, Players: %d", lastFps, blockName.c_str(), (int)players.size() + 1);
             ImGui::End();
         } else if (currentState == STATE_MAIN_MENU) {
             int winW, winH;
@@ -429,13 +625,22 @@ int main(void)
             float btn_w = 200.0f;
             ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
             if (ImGui::Button("Play", ImVec2(btn_w, 40))) {
-                currentState = STATE_IN_GAME;
-                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                // Generate a unique device ID based on computer name + random
+                char compName[256];
+                DWORD compNameLen = sizeof(compName);
+                GetComputerNameA(compName, &compNameLen);
+                std::string deviceId = std::string(compName) + "-" + std::to_string(GetTickCount());
                 
-                // Prevent large camera jump by resetting last mouse position
-                glfwGetCursorPos(window, &lastMouseX, &lastMouseY);
-                // Also reset frame time to avoid huge delta time
-                lastFrameTime = glfwGetTime();
+                nakamaClient.authenticateDevice(deviceId,
+                    [&nakamaSession, &nakamaAuthPending](NakamaSession session) {
+                        std::cout << "Successfully connected! Session token: " << session.token << std::endl;
+                        nakamaSession = session;
+                        nakamaAuthPending = true; // Signal main thread to switch state
+                    },
+                    [](std::string error) {
+                        std::cout << "Connection failed! Error: " << error << std::endl;
+                    }
+                );
             }
             
             ImGui::Spacing();
@@ -463,6 +668,7 @@ int main(void)
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
 
+    nakamaClient.leaveMatch();
     ma_engine_uninit(&engine);
 
     glfwTerminate();

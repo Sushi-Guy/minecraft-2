@@ -3,6 +3,7 @@
 #include <GLFW/glfw3.h>
 #include <vector>
 #include <cmath>
+#include <functional>
 #include "rendering.h"
 #include "player.h"
 #include "../../dependencies/miniaudio.h"
@@ -15,7 +16,9 @@ inline void handleMouseInteractions(GLFWwindow* window, float currentFrameTime, 
     std::vector<Block>& level, int& NUM_BLOCKS, 
     std::vector<RenderChunk>& chunks, int CHUNK_SIZE,
     GLuint grassTex, GLuint dirtTex, GLuint stoneTex, GLuint oak_planksTex, GLuint currentSelectedTexture,
-    ma_engine* engine, int blockSize, bool& leftMousePressed, bool& rightMousePressed) {
+    ma_engine* engine, int blockSize, bool& leftMousePressed, bool& rightMousePressed,
+    std::function<void(int)> onBlockBreak = nullptr,
+    std::function<void(float,float,float,float,float,float,int)> onBlockPlace = nullptr) {
     
     // --- MOUSE CLICK INTERACTION ---
     bool leftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
@@ -56,12 +59,15 @@ inline void handleMouseInteractions(GLFWwindow* window, float currentFrameTime, 
             }
 
             if (currentBreakTime >= requiredBreakTime) {
-                level[hitIndex].isActive = false; // instead of level.erase
+                level[hitIndex].isActive = false;
                 chunks[hitIndex / CHUNK_SIZE].dirty = true;
                 
                 currentBreakTime = 0.0f;
                 currentBreakingBlockIndex = -1;
                 lastBreakTime = currentFrameTime;
+
+                // Notify multiplayer
+                if (onBlockBreak) onBlockBreak(hitIndex);
             }
         } else {
             currentBreakingBlockIndex = -1;
@@ -142,6 +148,13 @@ inline void handleMouseInteractions(GLFWwindow* window, float currentFrameTime, 
                 
                 chunks[placedIndex / CHUNK_SIZE].dirty = true;
                 lastPlaceTime = currentFrameTime;
+
+                // Notify multiplayer
+                if (onBlockPlace) onBlockPlace(
+                    newBlock.minX, newBlock.maxX,
+                    newBlock.minY, newBlock.maxY,
+                    newBlock.minZ, newBlock.maxZ,
+                    (int)currentSelectedTexture);
 
                 // Play sound
                 if(currentSelectedTexture == dirtTex || currentSelectedTexture == grassTex) {
