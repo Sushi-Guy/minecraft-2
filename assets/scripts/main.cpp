@@ -3,6 +3,10 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <chrono>
+#ifndef _WIN32
+#  include <unistd.h>
+#endif
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 
@@ -625,11 +629,17 @@ int main(void)
             float btn_w = 200.0f;
             ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
             if (ImGui::Button("Play", ImVec2(btn_w, 40))) {
-                // Generate a unique device ID based on computer name + random
-                char compName[256];
+                // Generate a unique device ID (cross-platform)
+                char compName[256] = "unknown";
+#ifdef _WIN32
                 DWORD compNameLen = sizeof(compName);
                 GetComputerNameA(compName, &compNameLen);
-                std::string deviceId = std::string(compName) + "-" + std::to_string(GetTickCount());
+#else
+                gethostname(compName, sizeof(compName));
+#endif
+                auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                std::string deviceId = std::string(compName) + "-" + std::to_string(nowMs);
                 
                 nakamaClient.authenticateDevice(deviceId,
                     [&nakamaSession, &nakamaAuthPending](NakamaSession session) {
