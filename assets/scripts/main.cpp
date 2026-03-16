@@ -374,6 +374,33 @@ int main(void)
             // onBlockPlace
             [&](float minX, float maxX, float minY, float maxY, float minZ, float maxZ, int texId) {
                 nakamaClient.sendBlockPlace(nakamaSession, minX, maxX, minY, maxY, minZ, maxZ, texToNetId((GLuint)texId));
+            },
+            // Block placement when it intersects a remote player hitbox
+            [&](const Block& blockToPlace) {
+                auto players = nakamaClient.getRemotePlayers();
+                const float remoteRadius = 0.4f;
+                const float remoteHeight = 1.75f;
+                const float remoteHeadMargin = 0.2f;
+
+                for (const auto& pair : players) {
+                    const RemotePlayer& rp = pair.second;
+                    const float pMinX = rp.x - remoteRadius;
+                    const float pMaxX = rp.x + remoteRadius;
+                    const float pMinY = rp.y - remoteHeight;
+                    const float pMaxY = rp.y + remoteHeadMargin;
+                    const float pMinZ = rp.z - remoteRadius;
+                    const float pMaxZ = rp.z + remoteRadius;
+
+                    const bool overlaps =
+                        (pMinX < blockToPlace.maxX && pMaxX > blockToPlace.minX) &&
+                        (pMinY < blockToPlace.maxY && pMaxY > blockToPlace.minY) &&
+                        (pMinZ < blockToPlace.maxZ && pMaxZ > blockToPlace.minZ);
+
+                    if (overlaps) {
+                        return true;
+                    }
+                }
+                return false;
             }
         );
 

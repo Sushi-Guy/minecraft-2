@@ -18,7 +18,8 @@ inline void handleMouseInteractions(GLFWwindow* window, float currentFrameTime, 
     GLuint grassTex, GLuint dirtTex, GLuint stoneTex, GLuint oak_planksTex, GLuint currentSelectedTexture,
     ma_engine* engine, int blockSize, bool& leftMousePressed, bool& rightMousePressed,
     std::function<void(int)> onBlockBreak = nullptr,
-    std::function<void(float,float,float,float,float,float,int)> onBlockPlace = nullptr) {
+    std::function<void(float,float,float,float,float,float,int)> onBlockPlace = nullptr,
+    std::function<bool(const Block&)> isPlacementBlocked = nullptr) {
     
     // --- MOUSE CLICK INTERACTION ---
     bool leftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
@@ -106,7 +107,9 @@ inline void handleMouseInteractions(GLFWwindow* window, float currentFrameTime, 
             float distToPlace = sqrt(dx*dx + dy*dy + dz*dz);
 
             // Enforce a minimum distance (e.g. 1.0 blocks) and check strict collision 
-            if (distToPlace >= 1.0f && !isColliding(playerX, playerY, playerZ, playerRadius, playerHeight, newBlock)) {
+            const bool blockedByEntity = isPlacementBlocked ? isPlacementBlocked(newBlock) : false;
+
+            if (distToPlace >= 1.0f && !isColliding(playerX, playerY, playerZ, playerRadius, playerHeight, newBlock) && !blockedByEntity) {
                 // Try to find an inactive block to replace
                 int placedIndex = -1;
                 for (int i = 0; i < NUM_BLOCKS; i++) {
