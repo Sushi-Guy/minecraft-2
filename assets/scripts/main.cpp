@@ -32,7 +32,7 @@ enum GameState { STATE_MAIN_MENU, STATE_IN_GAME, STATE_PAUSED, STATE_SETTINGS };
 int main(void)
 {
     // Initialize Nakama Client
-    NakamaClient nakamaClient("defaultkey", "127.0.0.1", 7350);
+    NakamaClient nakamaClient("defaultkey", "192.168.1.86", 7350);
     NakamaSession nakamaSession;
     bool nakamaAuthPending = false; // Flag to handle auth on the main thread
     float lastPositionSendTime = 0.0f;
