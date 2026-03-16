@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cmath>
 
 #ifdef _WIN32
 #  include <windows.h>
@@ -43,7 +44,25 @@ struct NakamaSession {
 
 struct RemotePlayer {
     std::string userId;
-    float x, y, z, yaw, pitch;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+    float startX = 0.0f;
+    float startY = 0.0f;
+    float startZ = 0.0f;
+    float startYaw = 0.0f;
+    float startPitch = 0.0f;
+    float targetX = 0.0f;
+    float targetY = 0.0f;
+    float targetZ = 0.0f;
+    float targetYaw = 0.0f;
+    float targetPitch = 0.0f;
+    float interpolationProgress = 1.0f;
+    float interpolationDuration = 0.10f;
+    NakamaU64 lastSnapshotTs = 0;
+    bool initialized = false;
     bool active = true;
 };
 
@@ -165,15 +184,55 @@ public:
                         remotePlayers.erase(uid);
                         searchPos = valuePos + 10; continue;
                     }
-                    RemotePlayer rp;
+                    const float newX = extractJsonFloat(unescaped, "x");
+                    const float newY = extractJsonFloat(unescaped, "y");
+                    const float newZ = extractJsonFloat(unescaped, "z");
+                    const float newYaw = extractJsonFloat(unescaped, "yaw");
+                    const float newPitch = extractJsonFloat(unescaped, "pitch");
+
+                    RemotePlayer& rp = remotePlayers[uid];
                     rp.userId = uid;
-                    rp.x = extractJsonFloat(unescaped, "x");
-                    rp.y = extractJsonFloat(unescaped, "y");
-                    rp.z = extractJsonFloat(unescaped, "z");
-                    rp.yaw = extractJsonFloat(unescaped, "yaw");
-                    rp.pitch = extractJsonFloat(unescaped, "pitch");
                     rp.active = true;
-                    remotePlayers[uid] = rp;
+
+                    if (!rp.initialized) {
+                        rp.x = newX;
+                        rp.y = newY;
+                        rp.z = newZ;
+                        rp.yaw = newYaw;
+                        rp.pitch = newPitch;
+                        rp.startX = newX;
+                        rp.startY = newY;
+                        rp.startZ = newZ;
+                        rp.startYaw = newYaw;
+                        rp.startPitch = newPitch;
+                        rp.targetX = newX;
+                        rp.targetY = newY;
+                        rp.targetZ = newZ;
+                        rp.targetYaw = newYaw;
+                        rp.targetPitch = newPitch;
+                        rp.interpolationProgress = 1.0f;
+                        rp.interpolationDuration = 0.10f;
+                        rp.lastSnapshotTs = ts;
+                        rp.initialized = true;
+                    } else {
+                        float snapshotDeltaSeconds = rp.interpolationDuration;
+                        if (ts > 0 && rp.lastSnapshotTs > 0 && ts > rp.lastSnapshotTs) {
+                            snapshotDeltaSeconds = static_cast<float>(ts - rp.lastSnapshotTs) / 1000.0f;
+                        }
+                        rp.lastSnapshotTs = ts;
+                        rp.startX = rp.x;
+                        rp.startY = rp.y;
+                        rp.startZ = rp.z;
+                        rp.startYaw = rp.yaw;
+                        rp.startPitch = rp.pitch;
+                        rp.targetX = newX;
+                        rp.targetY = newY;
+                        rp.targetZ = newZ;
+                        rp.targetYaw = newYaw;
+                        rp.targetPitch = newPitch;
+                        rp.interpolationProgress = 0.0f;
+                        rp.interpolationDuration = std::clamp(snapshotDeltaSeconds, 0.05f, 0.25f);
+                    }
                 }
                 searchPos = valuePos + 10;
             }
@@ -181,6 +240,34 @@ public:
                 if (!it->second.active) it = remotePlayers.erase(it); else ++it;
             }
         }).detach();
+    }
+
+    void updateRemotePlayers(float deltaTime) {
+        std::lock_guard<std::mutex> lock(playersMutex);
+        for (auto& pair : remotePlayers) {
+            RemotePlayer& rp = pair.second;
+            if (!rp.initialized) continue;
+
+            if (rp.interpolationProgress >= 1.0f) {
+                rp.x = rp.targetX;
+                rp.y = rp.targetY;
+                rp.z = rp.targetZ;
+                rp.yaw = rp.targetYaw;
+                rp.pitch = rp.targetPitch;
+                continue;
+            }
+
+            const float duration = std::max(rp.interpolationDuration, 0.001f);
+            rp.interpolationProgress = std::min(1.0f, rp.interpolationProgress + (deltaTime / duration));
+            const float t = rp.interpolationProgress;
+            const float easedT = t * t * (3.0f - 2.0f * t);
+
+            rp.x = rp.startX + (rp.targetX - rp.startX) * easedT;
+            rp.y = rp.startY + (rp.targetY - rp.startY) * easedT;
+            rp.z = rp.startZ + (rp.targetZ - rp.startZ) * easedT;
+            rp.yaw = lerpAngleDegrees(rp.startYaw, rp.targetYaw, easedT);
+            rp.pitch = rp.startPitch + (rp.targetPitch - rp.startPitch) * easedT;
+        }
     }
 
     std::map<std::string, RemotePlayer> getRemotePlayers() {
@@ -280,6 +367,13 @@ public:
     }
 
 private:
+    static float lerpAngleDegrees(float from, float to, float t) {
+        float delta = std::fmod(to - from, 360.0f);
+        if (delta > 180.0f) delta -= 360.0f;
+        if (delta < -180.0f) delta += 360.0f;
+        return from + delta * t;
+    }
+
     void _sendBlockEvent(const NakamaSession& session,
                          const char* valueBuf, NakamaU64 seq) {
         std::string key = "ev_" + std::to_string((unsigned long long)seq);

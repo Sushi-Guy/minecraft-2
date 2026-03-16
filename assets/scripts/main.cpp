@@ -27,7 +27,7 @@
 
 using namespace std;
 
-enum GameState { STATE_MAIN_MENU, STATE_IN_GAME };
+enum GameState { STATE_MAIN_MENU, STATE_IN_GAME, STATE_PAUSED, STATE_SETTINGS };
 
 int main(void)
 {
@@ -38,7 +38,7 @@ int main(void)
     float lastPositionSendTime = 0.0f;
     float positionSendInterval = 0.1f; // Send position 10 times per second
     float lastPositionPollTime = 0.0f;
-    float positionPollInterval = 0.15f; // Poll for others 6-7 times per second
+    float positionPollInterval = 0.1f; // Poll at the same cadence we send to avoid dropping snapshots
     float lastBlockEventPollTime = 0.0f;
     float blockEventPollInterval = 0.2f; // Poll for block changes 5 times per second
 
@@ -52,7 +52,7 @@ int main(void)
         return -1;
     }
 
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
     window = glfwCreateWindow(1920, 1080, "Minecraft 2.0!", NULL, NULL);
 
     if (!window)
@@ -249,6 +249,40 @@ int main(void)
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     ImGui::StyleColorsDark();
 
+    int uiScaleStep = 1;
+    ImGuiStyle baseStyle = ImGui::GetStyle();
+    auto applyUiScale = [&](int scaleStep) {
+        ImGuiStyle& style = ImGui::GetStyle();
+        style = baseStyle;
+        style.ScaleAllSizes((float)scaleStep);
+        io.FontGlobalScale = (float)scaleStep;
+    };
+
+    float volume = 1.0f;
+
+    const char* SETTINGS_FILE = "settings.cfg";
+    auto saveSettings = [&]() {
+        std::ofstream f(SETTINGS_FILE);
+        if (f.is_open()) {
+            f << "uiScale " << uiScaleStep << "\n";
+            f << "mouseSensitivity " << mouseSensitivity << "\n";
+            f << "volume " << volume << "\n";
+        }
+    };
+    auto loadSettings = [&]() {
+        std::ifstream f(SETTINGS_FILE);
+        if (!f.is_open()) return;
+        std::string key;
+        while (f >> key) {
+            if (key == "uiScale")              { f >> uiScaleStep; }
+            else if (key == "mouseSensitivity") { f >> mouseSensitivity; }
+            else if (key == "volume")           { f >> volume; }
+        }
+    };
+
+    loadSettings();
+    applyUiScale(uiScaleStep);
+
     // Setup Platform/Renderer backends
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL2_Init();
@@ -257,6 +291,7 @@ int main(void)
     if (ma_engine_init(NULL, &engine) != MA_SUCCESS) {
         cout << "Failed to initialize audio engine." << endl;
     }
+    ma_engine_set_volume(&engine, volume);
 
     // Setup Display List for Optimization
     int lastBreakingBlockIndex = -1;
@@ -276,12 +311,7 @@ int main(void)
         // Check if Nakama auth completed (must handle GLFW calls on main thread)
         if (nakamaAuthPending) {
             nakamaAuthPending = false;
-            currentState = STATE_IN_GAME;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-            glfwGetCursorPos(window, &lastMouseX, &lastMouseY);
-            lastFrameTime = glfwGetTime();
-
-            // Join multiplayer: start sending/receiving positions via storage
+            // Don't change state — already in game
             nakamaClient.inMatch = true;
             std::cout << "Multiplayer active! Your user ID: " << nakamaSession.userId << std::endl;
         }
@@ -303,7 +333,7 @@ int main(void)
         if (currentState == STATE_IN_GAME) {
             // Check for pause
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-                currentState = STATE_MAIN_MENU;
+                currentState = STATE_PAUSED;
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
             }
 
@@ -364,6 +394,8 @@ int main(void)
                 });
                 lastBlockEventPollTime = currentFrameTime;
             }
+
+            nakamaClient.updateRemotePlayers(deltaTime);
         }
 
         // --- Apply pending block events on the main thread ---
@@ -403,6 +435,7 @@ int main(void)
 
         float outlineColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
         float defaultModelColor[4] = {1.0f, 1.0f, 0.0f, 1.0f};
+        float uiScale = (float)uiScaleStep;
         
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -478,7 +511,7 @@ int main(void)
                 const RemotePlayer& rp = pair.second;
                 glPushMatrix();
                 // Position the player (feet position, offset Y down by half the player height)
-                glTranslatef(rp.x, rp.y - 0.75f, rp.z);
+                glTranslatef(rp.x, rp.y - 1.75f, rp.z);
                 
                 // Draw a simple colored box to represent the player
                 float playerWidth = 0.4f;
@@ -575,18 +608,19 @@ int main(void)
         glDisable(GL_TEXTURE_2D);
 
         glColor4f(1.0f, 1.0f, 1.0f, 1.0f); // White crosshair
-        glLineWidth(4.0f);
+        glLineWidth(4.0f * uiScale);
         
         float centerX = winWidth / 2.0f;
         float centerY = winHeight / 2.0f;
+        float crosshairHalfSize = 20.0f * uiScale;
         
         glBegin(GL_LINES);
         // Horizontal line
-        glVertex2f(centerX - 20, centerY);
-        glVertex2f(centerX + 20, centerY);
+        glVertex2f(centerX - crosshairHalfSize, centerY);
+        glVertex2f(centerX + crosshairHalfSize, centerY);
         // Vertical line
-        glVertex2f(centerX, centerY - 20);
-        glVertex2f(centerX, centerY + 20);
+        glVertex2f(centerX, centerY - crosshairHalfSize);
+        glVertex2f(centerX, centerY + crosshairHalfSize);
         glEnd();
         glLineWidth(1.0f);
 
@@ -601,19 +635,55 @@ int main(void)
 
         // Render ImGui UI on top of everything
         if (currentState == STATE_IN_GAME) {
-            ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
-            ImGui::SetNextWindowSize(ImVec2(250, 70), ImGuiCond_Always);
+            ImGui::SetNextWindowPos(ImVec2(10.0f * uiScale, 10.0f * uiScale), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(300.0f * uiScale, 70.0f * uiScale), ImGuiCond_Always);
             
             // We can optionally add flags like ImGuiWindowFlags_NoTitleBar if you don't want a top bar at all!
             ImGui::Begin("HUD", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground);
             auto players = nakamaClient.getRemotePlayers();
             ImGui::Text("FPS: %d, Selected: %s, Players: %d", lastFps, blockName.c_str(), (int)players.size() + 1);
             ImGui::End();
+        } else if(currentState == STATE_PAUSED) {
+            int winW, winH;
+            glfwGetFramebufferSize(window, &winW, &winH);
+                
+            ImVec2 window_size = ImVec2(
+                std::min((float)winW * 0.9f, 260.0f * uiScale),
+                std::min((float)winH * 0.9f, 230.0f * uiScale)
+            );
+            ImGui::SetNextWindowSize(window_size, ImGuiCond_Always);
+            ImGui::SetNextWindowPos(ImVec2((winW - window_size.x) * 0.5f, (winH - window_size.y) * 0.5f), ImGuiCond_Always);
+                
+            ImGui::Begin("Paused", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
+            float btn_w = 100.0f * uiScale;
+
+            ImGui::Text("Game Paused");
+            ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
+            if (ImGui::Button("Resume", ImVec2(btn_w, 30.0f * uiScale))) {
+                currentState = STATE_IN_GAME;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                glfwGetCursorPos(window, &lastMouseX, &lastMouseY);
+            }
+
+            ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
+            if(ImGui::Button("Settings", ImVec2(btn_w, 30.0f * uiScale))) {
+                currentState = STATE_SETTINGS;
+            }
+
+            ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
+            if(ImGui::Button("Main Menu", ImVec2(btn_w, 30.0f * uiScale))) {
+                currentState = STATE_MAIN_MENU;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            }
+            ImGui::End();
         } else if (currentState == STATE_MAIN_MENU) {
             int winW, winH;
             glfwGetFramebufferSize(window, &winW, &winH);
             
-            ImVec2 window_size = ImVec2(300, 200);
+            ImVec2 window_size = ImVec2(
+                std::min((float)winW * 0.9f, 300.0f * uiScale),
+                std::min((float)winH * 0.9f, 200.0f * uiScale)
+            );
             ImGui::SetNextWindowSize(window_size, ImGuiCond_Always);
             ImGui::SetNextWindowPos(ImVec2((winW - window_size.x) * 0.5f, (winH - window_size.y) * 0.5f), ImGuiCond_Always);
             
@@ -626,10 +696,16 @@ int main(void)
             ImGui::Spacing();
             ImGui::Spacing();
             
-            float btn_w = 200.0f;
+            float btn_w = 200.0f * uiScale;
             ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
-            if (ImGui::Button("Play", ImVec2(btn_w, 40))) {
-                // Generate a unique device ID (cross-platform)
+            if (ImGui::Button("Play", ImVec2(btn_w, 40.0f * uiScale))) {
+                // Enter game immediately (singleplayer)
+                currentState = STATE_IN_GAME;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                glfwGetCursorPos(window, &lastMouseX, &lastMouseY);
+                lastFrameTime = glfwGetTime();
+
+                // Try to connect to multiplayer in the background
                 char compName[256] = "unknown";
 #ifdef _WIN32
                 DWORD compNameLen = sizeof(compName);
@@ -640,24 +716,77 @@ int main(void)
                 auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
                 std::string deviceId = std::string(compName) + "-" + std::to_string(nowMs);
-                
+
                 nakamaClient.authenticateDevice(deviceId,
                     [&nakamaSession, &nakamaAuthPending](NakamaSession session) {
-                        std::cout << "Successfully connected! Session token: " << session.token << std::endl;
+                        std::cout << "Multiplayer connected! Token: " << session.token << std::endl;
                         nakamaSession = session;
-                        nakamaAuthPending = true; // Signal main thread to switch state
+                        nakamaAuthPending = true;
                     },
                     [](std::string error) {
-                        std::cout << "Connection failed! Error: " << error << std::endl;
+                        std::cout << "Multiplayer unavailable: " << error << std::endl;
                     }
                 );
+            }
+        
+            ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
+            if(ImGui::Button("Settings", ImVec2(btn_w, 40.0f * uiScale))) {
+                currentState = STATE_SETTINGS;
             }
             
             ImGui::Spacing();
             
             ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
-            if (ImGui::Button("Quit", ImVec2(btn_w, 40))) {
+            if (ImGui::Button("Quit", ImVec2(btn_w, 40.0f * uiScale))) {
                 glfwSetWindowShouldClose(window, true);
+            }
+            
+            ImGui::End();
+        } else if(currentState == STATE_SETTINGS) {
+            int winW, winH;
+            glfwGetFramebufferSize(window, &winW, &winH);
+            
+            ImVec2 window_size = ImVec2(
+                std::min((float)winW * 0.9f, 300.0f * uiScale),
+                std::min((float)winH * 0.9f, 200.0f * uiScale)
+            );
+            ImGui::SetNextWindowSize(window_size, ImGuiCond_Always);
+            ImGui::SetNextWindowPos(ImVec2((winW - window_size.x) * 0.5f, (winH - window_size.y) * 0.5f), ImGuiCond_Always);
+            
+            ImGui::Begin("Settings", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
+            
+            ImVec2 title_size = ImGui::CalcTextSize("Settings");
+            ImGui::SetCursorPosX((window_size.x - title_size.x) * 0.5f);
+            ImGui::Text("Settings");
+            
+            ImGui::Spacing();
+            ImGui::Spacing();
+            
+            float btn_w = 200.0f * uiScale;
+
+            ImGui::SetNextItemWidth(btn_w);
+            ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
+            if (ImGui::SliderInt("UI Scale", &uiScaleStep, 1, 5, "%dx")) {
+                applyUiScale(uiScaleStep);
+                uiScale = (float)uiScaleStep;
+            }
+
+            ImGui::SetNextItemWidth(btn_w);
+            ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
+            ImGui::SliderFloat("Mouse Sensitivity", &mouseSensitivity, 0.01f, 1.0f, "%.2f");
+
+            ImGui::SetNextItemWidth(btn_w);
+            ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
+            if (ImGui::SliderFloat("Volume", &volume, 0.0f, 1.0f, "%.2f")) {
+                ma_engine_set_volume(&engine, volume);
+            }
+
+            ImGui::Spacing();
+
+            ImGui::SetCursorPosX((window_size.x - btn_w) * 0.5f);
+            if(ImGui::Button("Back to Menu", ImVec2(btn_w, 40.0f * uiScale))) {
+                saveSettings();
+                currentState = STATE_MAIN_MENU;
             }
             
             ImGui::End();
