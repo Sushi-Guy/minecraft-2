@@ -37,12 +37,6 @@ jobs:
         mv libGLEW.*.dylib Mac_Build/
         cp -r assets Mac_Build/
 
-    - name: Upload Compiled Game
-      uses: actions/upload-artifact@v4
-      with:
-        name: Minecraft-MacOS-Executable
-        path: Mac_Build/Minecraft_Mac_App
-
     - name: Upload Packaged Build
       uses: actions/upload-artifact@v4
       with:
