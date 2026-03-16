@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstring>
 #include <algorithm>
+#include <unordered_set>
 #include <cstdint>
 #include <cstdio>
 #include <cmath>
@@ -62,6 +63,7 @@ struct RemotePlayer {
     float interpolationProgress = 1.0f;
     float interpolationDuration = 0.10f;
     NakamaU64 lastSnapshotTs = 0;
+    NakamaU64 lastSeenLocalMs = 0;
     bool initialized = false;
     bool active = true;
 };
@@ -81,9 +83,14 @@ public:
     int port;
 
     std::mutex playersMutex;
+    std::mutex blockEventsMutex;
     std::map<std::string, RemotePlayer> remotePlayers;
     std::atomic<bool> inMatch{false};
+    std::atomic<bool> positionPollInFlight{false};
+    std::atomic<bool> blockPollInFlight{false};
     NakamaU64 lastSeenEventSeq = 0;
+    std::unordered_set<std::string> seenBlockEventKeys;
+    std::vector<std::string> seenBlockEventKeyOrder;
 
     NakamaClient(const std::string& key = "defaultkey",
                  const std::string& h = "127.0.0.1", int p = 7350)
@@ -152,13 +159,18 @@ public:
 
     void pollPositions(const NakamaSession& session) {
         if (!inMatch) return;
+        bool expected = false;
+        if (!positionPollInFlight.compare_exchange_strong(expected, true)) return;
+
         std::thread([this, session]() {
             std::string response = httpRequest("GET",
                 "/v2/storage/positions?limit=50", "", session.token);
-            if (response.empty()) return;
+            if (response.empty()) {
+                positionPollInFlight = false;
+                return;
+            }
 
             std::lock_guard<std::mutex> lock(playersMutex);
-            for (auto& p : remotePlayers) p.second.active = false;
 
             size_t searchPos = 0;
             while (true) {
@@ -180,10 +192,6 @@ public:
                 if (uid != session.userId && !uid.empty()) {
                     NakamaU64 nowMs = nakama_now_ms();
                     NakamaU64 ts = extractJsonULL(unescaped, "ts");
-                    if (ts > 0 && nowMs > ts && (nowMs - ts) > 5000) {
-                        remotePlayers.erase(uid);
-                        searchPos = valuePos + 10; continue;
-                    }
                     const float newX = extractJsonFloat(unescaped, "x");
                     const float newY = extractJsonFloat(unescaped, "y");
                     const float newZ = extractJsonFloat(unescaped, "z");
@@ -193,6 +201,7 @@ public:
                     RemotePlayer& rp = remotePlayers[uid];
                     rp.userId = uid;
                     rp.active = true;
+                    rp.lastSeenLocalMs = nowMs;
 
                     if (!rp.initialized) {
                         rp.x = newX;
@@ -213,8 +222,14 @@ public:
                         rp.interpolationProgress = 1.0f;
                         rp.interpolationDuration = 0.10f;
                         rp.lastSnapshotTs = ts;
+                        rp.lastSeenLocalMs = nowMs;
                         rp.initialized = true;
                     } else {
+                        if (ts > 0 && rp.lastSnapshotTs > 0 && ts <= rp.lastSnapshotTs) {
+                            searchPos = valuePos + 10;
+                            continue;
+                        }
+
                         float snapshotDeltaSeconds = rp.interpolationDuration;
                         if (ts > 0 && rp.lastSnapshotTs > 0 && ts > rp.lastSnapshotTs) {
                             snapshotDeltaSeconds = static_cast<float>(ts - rp.lastSnapshotTs) / 1000.0f;
@@ -236,9 +251,18 @@ public:
                 }
                 searchPos = valuePos + 10;
             }
+
+            NakamaU64 nowMs = nakama_now_ms();
             for (auto it = remotePlayers.begin(); it != remotePlayers.end();) {
-                if (!it->second.active) it = remotePlayers.erase(it); else ++it;
+                const NakamaU64 seenMs = it->second.lastSeenLocalMs;
+                if (seenMs > 0 && nowMs > seenMs && (nowMs - seenMs) > 6000) {
+                    it = remotePlayers.erase(it);
+                } else {
+                    ++it;
+                }
             }
+
+            positionPollInFlight = false;
         }).detach();
     }
 
@@ -307,14 +331,20 @@ public:
     void pollBlockEvents(const NakamaSession& session,
                          std::function<void(const BlockEvent&)> onEvent) {
         if (!inMatch) return;
+        bool expected = false;
+        if (!blockPollInFlight.compare_exchange_strong(expected, true)) return;
+
         std::thread([this, session, onEvent]() {
             std::string response = httpRequest("GET",
                 "/v2/storage/blockevents?limit=100", "", session.token);
-            if (response.empty()) return;
+            if (response.empty()) {
+                blockPollInFlight = false;
+                return;
+            }
 
             size_t searchPos = 0;
             NakamaU64 maxSeq = lastSeenEventSeq;
-            std::vector<std::pair<NakamaU64, BlockEvent>> events;
+            std::vector<BlockEvent> events;
 
             while (true) {
                 size_t valuePos = response.find("\"value\"", searchPos);
@@ -325,7 +355,16 @@ public:
                     ? response.substr(objStart, valuePos - objStart) : "";
 
                 std::string ownerId = extractJsonString(objHeader, "user_id");
+                std::string eventKey = extractJsonString(objHeader, "key");
                 if (ownerId == session.userId) { searchPos = valuePos+10; continue; }
+
+                {
+                    std::lock_guard<std::mutex> lock(blockEventsMutex);
+                    if (!eventKey.empty() && seenBlockEventKeys.find(eventKey) != seenBlockEventKeys.end()) {
+                        searchPos = valuePos + 10;
+                        continue;
+                    }
+                }
 
                 std::string valueStr = extractJsonStringAt(response, valuePos);
                 std::string unescaped;
@@ -335,28 +374,38 @@ public:
                 }
 
                 NakamaU64 seq = extractJsonULL(unescaped, "seq");
-                if (seq > lastSeenEventSeq) {
-                    BlockEvent ev;
-                    ev.seq = seq;
-                    ev.type = extractJsonString(unescaped, "type");
-                    ev.index = (int)extractJsonULL(unescaped, "idx");
-                    ev.minX = extractJsonFloat(unescaped, "minX");
-                    ev.maxX = extractJsonFloat(unescaped, "maxX");
-                    ev.minY = extractJsonFloat(unescaped, "minY");
-                    ev.maxY = extractJsonFloat(unescaped, "maxY");
-                    ev.minZ = extractJsonFloat(unescaped, "minZ");
-                    ev.maxZ = extractJsonFloat(unescaped, "maxZ");
-                    ev.textureId = (int)extractJsonULL(unescaped, "tex");
-                    events.push_back({seq, ev});
-                    if (seq > maxSeq) maxSeq = seq;
+                BlockEvent ev;
+                ev.seq = seq;
+                ev.type = extractJsonString(unescaped, "type");
+                ev.index = (int)extractJsonULL(unescaped, "idx");
+                ev.minX = extractJsonFloat(unescaped, "minX");
+                ev.maxX = extractJsonFloat(unescaped, "maxX");
+                ev.minY = extractJsonFloat(unescaped, "minY");
+                ev.maxY = extractJsonFloat(unescaped, "maxY");
+                ev.minZ = extractJsonFloat(unescaped, "minZ");
+                ev.maxZ = extractJsonFloat(unescaped, "maxZ");
+                ev.textureId = (int)extractJsonULL(unescaped, "tex");
+                events.push_back(ev);
+                if (seq > maxSeq) maxSeq = seq;
+
+                if (!eventKey.empty()) {
+                    std::lock_guard<std::mutex> lock(blockEventsMutex);
+                    if (seenBlockEventKeys.insert(eventKey).second) {
+                        seenBlockEventKeyOrder.push_back(eventKey);
+                        const size_t maxRememberedKeys = 2000;
+                        if (seenBlockEventKeyOrder.size() > maxRememberedKeys) {
+                            const std::string oldest = seenBlockEventKeyOrder.front();
+                            seenBlockEventKeyOrder.erase(seenBlockEventKeyOrder.begin());
+                            seenBlockEventKeys.erase(oldest);
+                        }
+                    }
                 }
                 searchPos = valuePos + 10;
             }
 
-            std::sort(events.begin(), events.end(),
-                [](const auto& a, const auto& b){ return a.first < b.first; });
             lastSeenEventSeq = maxSeq;
-            for (const auto& p : events) onEvent(p.second);
+            for (const auto& ev : events) onEvent(ev);
+            blockPollInFlight = false;
         }).detach();
     }
 
@@ -364,6 +413,12 @@ public:
         inMatch = false;
         std::lock_guard<std::mutex> lock(playersMutex);
         remotePlayers.clear();
+        positionPollInFlight = false;
+        blockPollInFlight = false;
+
+        std::lock_guard<std::mutex> eventsLock(blockEventsMutex);
+        seenBlockEventKeys.clear();
+        seenBlockEventKeyOrder.clear();
     }
 
 private:
